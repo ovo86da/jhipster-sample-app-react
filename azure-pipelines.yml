@@ -44,14 +44,6 @@ stages:
                 maven | "$(Agent.OS)"
               path: '$(MAVEN_CACHE_FOLDER)'
 
-          - task: Cache@2
-            displayName: 'Cache npm cache'
-            inputs:
-              key: 'npm | "$(Agent.OS)" | package-lock.json'
-              restoreKeys: |
-                npm | "$(Agent.OS)"
-              path: '$(NPM_CACHE_FOLDER)'
-
           - script: |
               set -euo pipefail
               chmod +x mvnw
