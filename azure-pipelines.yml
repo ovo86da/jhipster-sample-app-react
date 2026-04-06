@@ -1,0 +1,127 @@
+trigger:
+  branches:
+    include:
+      - main
+
+pr:
+  branches:
+    include:
+      - main
+
+pool:
+  vmImage: 'ubuntu-latest'
+
+variables:
+  JAVA_VERSION: '21'
+  MAVEN_CACHE_FOLDER: '$(Pipeline.Workspace)/.m2/repository'
+  NPM_CACHE_FOLDER: '$(Pipeline.Workspace)/.npm'
+  MAVEN_OPTS: '-Dmaven.repo.local=$(MAVEN_CACHE_FOLDER)'
+
+stages:
+  - stage: build_and_package
+    displayName: 'Build, test, package and publish artifacts'
+    jobs:
+      - job: build
+        displayName: 'Build JHipster React app'
+        steps:
+          - checkout: self
+            clean: true
+            fetchDepth: 1
+            persistCredentials: false
+
+          - task: JavaToolInstaller@0
+            displayName: 'Use JDK $(JAVA_VERSION)'
+            inputs:
+              versionSpec: '$(JAVA_VERSION)'
+              jdkArchitectureOption: 'x64'
+              jdkSourceOption: 'PreInstalled'
+
+          - task: Cache@2
+            displayName: 'Cache Maven repository'
+            inputs:
+              key: 'maven | "$(Agent.OS)" | pom.xml'
+              restoreKeys: |
+                maven | "$(Agent.OS)"
+              path: '$(MAVEN_CACHE_FOLDER)'
+
+          - task: Cache@2
+            displayName: 'Cache npm cache'
+            inputs:
+              key: 'npm | "$(Agent.OS)" | package-lock.json'
+              restoreKeys: |
+                npm | "$(Agent.OS)"
+              path: '$(NPM_CACHE_FOLDER)'
+
+          - script: |
+              set -euo pipefail
+              chmod +x mvnw npmw
+              ./mvnw -version
+              ./npmw --version
+            displayName: 'Validate wrappers'
+
+          - script: |
+              set -euo pipefail
+              export npm_config_cache="$(NPM_CACHE_FOLDER)"
+              ./mvnw -B -ntp -Pprod clean verify
+            displayName: 'Build and test with Maven (prod profile)'
+            env:
+              MAVEN_OPTS: $(MAVEN_OPTS)
+
+          - script: |
+              set -euo pipefail
+              ./mvnw -B -ntp org.cyclonedx:cyclonedx-maven-plugin:2.9.1:makeAggregateBom \
+                -DskipTests \
+                -DoutputFormat=json \
+                -DoutputName=sbom
+            displayName: 'Generate CycloneDX SBOM'
+            env:
+              MAVEN_OPTS: $(MAVEN_OPTS)
+
+          - task: PublishTestResults@2
+            displayName: 'Publish JUnit test results'
+            condition: succeededOrFailed()
+            inputs:
+              testResultsFormat: 'JUnit'
+              testResultsFiles: |
+                **/surefire-reports/TEST-*.xml
+                **/failsafe-reports/TEST-*.xml
+              searchFolder: '$(System.DefaultWorkingDirectory)'
+              mergeTestResults: true
+              failTaskOnFailedTests: false
+              testRunTitle: 'JUnit - jhipster-sample-app-react'
+
+          - script: |
+              set -euo pipefail
+              mkdir -p "$(Build.ArtifactStagingDirectory)/app"
+              mkdir -p "$(Build.ArtifactStagingDirectory)/sbom"
+              mkdir -p "$(Build.ArtifactStagingDirectory)/reports"
+
+              find target -maxdepth 1 -type f \( -name "*.jar" -o -name "*.war" \) -exec cp {} "$(Build.ArtifactStagingDirectory)/app/" \;
+              find target -type f \( -name "sbom.json" -o -name "bom.json" -o -name "*.cdx.json" \) -exec cp {} "$(Build.ArtifactStagingDirectory)/sbom/" \; || true
+              find target -type f \( -path "*/surefire-reports/*" -o -path "*/failsafe-reports/*" \) -exec cp --parents {} "$(Build.ArtifactStagingDirectory)/reports/" \; || true
+
+              ls -R "$(Build.ArtifactStagingDirectory)"
+            displayName: 'Collect build artifacts'
+
+          - task: PublishPipelineArtifact@1
+            displayName: 'Publish application artifact'
+            inputs:
+              targetPath: '$(Build.ArtifactStagingDirectory)/app'
+              artifact: 'app-package'
+              publishLocation: 'pipeline'
+
+          - task: PublishPipelineArtifact@1
+            displayName: 'Publish SBOM artifact'
+            condition: succeededOrFailed()
+            inputs:
+              targetPath: '$(Build.ArtifactStagingDirectory)/sbom'
+              artifact: 'sbom-cyclonedx'
+              publishLocation: 'pipeline'
+
+          - task: PublishPipelineArtifact@1
+            displayName: 'Publish reports artifact'
+            condition: succeededOrFailed()
+            inputs:
+              targetPath: '$(Build.ArtifactStagingDirectory)/reports'
+              artifact: 'test-reports'
+              publishLocation: 'pipeline'
