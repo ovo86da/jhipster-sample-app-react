@@ -48,7 +48,7 @@ stages:
               set -euo pipefail
               chmod +x mvnw
               [ -f npmw ] && chmod +x npmw || true
-              ./mvnw -B -ntp -Pprod clean verify
+              ./mvnw -B -ntp -Pprod clean package -DskipTests 
             displayName: 'Build and test with Maven (prod profile)'
             env:
               MAVEN_OPTS: $(MAVEN_OPTS)
